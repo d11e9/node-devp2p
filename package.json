@@ -50,6 +50,7 @@
     "browserify": "~12.0.1",
     "chrome-dgram": "~2.1.7",
     "browserify-sha3": "0.0.1",
-    "secp256k1-browserify": "0.0.0"
+    "secp256k1-browserify": "0.0.0",
+    "chrome-net": "~3.1.0"
   }
 }
