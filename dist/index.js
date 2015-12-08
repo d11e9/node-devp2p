@@ -26395,6 +26395,7 @@ Socket.prototype.bind = function (port, address, callback) {
   if (!address) address = '0.0.0.0'
 
   if (!port) port = 0
+    debugger;
 
   if (self._bindState !== BIND_STATE_UNBOUND) throw new Error('Socket is already bound')
 
