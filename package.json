@@ -25,7 +25,8 @@
   "browser": {
     "sha3": "browserify-sha3",
     "dgram": "chrome-dgram",
-    "secp256k1": "secp256k1-browserify"
+    "secp256k1": "secp256k1-browserify",
+    "net": "chrome-net"
   },
   "dependencies": {
     "async": "^1.4.2",

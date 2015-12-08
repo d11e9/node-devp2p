@@ -24,7 +24,10 @@
   ],
   "app": {
 	"background": {
-		"scripts": ["app.js"]
+		"scripts": [
+			"index.js",
+			"run.js"
+		]
     }
   },
   "manifest_version": 2
