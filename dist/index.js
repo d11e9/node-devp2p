@@ -247,7 +247,7 @@ ECIES.prototype.setupFrame = function (remoteData) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"./mac.js":4,"assert":16,"bigi":10,"bitwise-xor":12,"buffer":18,"crypto":21,"ecurve":245,"ethereumjs-util":248,"rlp":277,"secp256k1":15}],3:[function(require,module,exports){
+},{"./mac.js":4,"assert":16,"bigi":10,"bitwise-xor":12,"buffer":18,"crypto":21,"ecurve":248,"ethereumjs-util":251,"rlp":280,"secp256k1":15}],3:[function(require,module,exports){
 const net = require('net')
 const crypto = require('crypto')
 const util = require('util')
@@ -492,7 +492,7 @@ Network.prototype._popPeerList = function () {
   }
 }
 
-},{"../package.json":280,"./peer":5,"async":7,"crypto":21,"devp2p-dpt":237,"events":213,"net":15,"server-destroy":278,"underscore":279,"util":234}],4:[function(require,module,exports){
+},{"../package.json":283,"./peer":5,"async":7,"crypto":21,"devp2p-dpt":240,"events":213,"net":15,"server-destroy":281,"underscore":282,"util":234}],4:[function(require,module,exports){
 (function (Buffer){
 const sha3 = require('sha3')
 const xor = require('bitwise-xor')
@@ -826,7 +826,7 @@ Peer.prototype.createStream = function (opts) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"./ecies.js":2,"./stream.js":6,"buffer":18,"ethereumjs-util":248,"events":213,"rlp":277,"util":234}],6:[function(require,module,exports){
+},{"./ecies.js":2,"./stream.js":6,"buffer":18,"ethereumjs-util":251,"events":213,"rlp":280,"util":234}],6:[function(require,module,exports){
 (function (Buffer){
 const Duplex = require('stream').Duplex
 const util = require('util')
@@ -26184,9 +26184,471 @@ module.exports = function(arr, obj){
   return -1;
 };
 },{}],237:[function(require,module,exports){
+(function (Buffer){
+/*global chrome */
+
+/**
+ * UDP / Datagram Sockets
+ * ======================
+ *
+ * Datagram sockets are available through require('chrome-dgram').
+ */
+
+exports.Socket = Socket
+
+var EventEmitter = require('events').EventEmitter
+var inherits = require('inherits')
+var series = require('run-series')
+
+var BIND_STATE_UNBOUND = 0
+var BIND_STATE_BINDING = 1
+var BIND_STATE_BOUND = 2
+
+// Track open sockets to route incoming data (via onReceive) to the right handlers.
+var sockets = {}
+
+if (typeof chrome !== 'undefined') {
+  chrome.sockets.udp.onReceive.addListener(onReceive)
+  chrome.sockets.udp.onReceiveError.addListener(onReceiveError)
+}
+
+function onReceive (info) {
+  if (info.socketId in sockets) {
+    sockets[info.socketId]._onReceive(info)
+  } else {
+    console.error('Unknown socket id: ' + info.socketId)
+  }
+}
+
+function onReceiveError (info) {
+  if (info.socketId in sockets) {
+    sockets[info.socketId]._onReceiveError(info.resultCode)
+  } else {
+    console.error('Unknown socket id: ' + info.socketId)
+  }
+}
+
+/**
+ * dgram.createSocket(type, [callback])
+ *
+ * Creates a datagram Socket of the specified types. Valid types are `udp4`
+ * and `udp6`.
+ *
+ * Takes an optional callback which is added as a listener for message events.
+ *
+ * Call socket.bind if you want to receive datagrams. socket.bind() will bind
+ * to the "all interfaces" address on a random port (it does the right thing
+ * for both udp4 and udp6 sockets). You can then retrieve the address and port
+ * with socket.address().address and socket.address().port.
+ *
+ * @param  {string} type       Either 'udp4' or 'udp6'
+ * @param  {function} listener Attached as a listener to message events.
+ *                             Optional
+ * @return {Socket}            Socket object
+ */
+exports.createSocket = function (type, listener) {
+  return new Socket(type, listener)
+}
+
+inherits(Socket, EventEmitter)
+
+/**
+ * Class: dgram.Socket
+ *
+ * The dgram Socket class encapsulates the datagram functionality. It should
+ * be created via `dgram.createSocket(type, [callback])`.
+ *
+ * Event: 'message'
+ *   - msg Buffer object. The message
+ *   - rinfo Object. Remote address information
+ *   Emitted when a new datagram is available on a socket. msg is a Buffer and
+ *   rinfo is an object with the sender's address information and the number
+ *   of bytes in the datagram.
+ *
+ * Event: 'listening'
+ *   Emitted when a socket starts listening for datagrams. This happens as soon
+ *   as UDP sockets are created.
+ *
+ * Event: 'close'
+ *   Emitted when a socket is closed with close(). No new message events will
+ *   be emitted on this socket.
+ *
+ * Event: 'error'
+ *   - exception Error object
+ *   Emitted when an error occurs.
+ */
+function Socket (options, listener) {
+  var self = this
+  EventEmitter.call(self)
+  if (typeof options === 'string') options = { type: options }
+  if (options.type !== 'udp4') throw new Error('Bad socket type specified. Valid types are: udp4')
+
+  if (typeof listener === 'function') self.on('message', listener)
+
+  self._destroyed = false
+  self._bindState = BIND_STATE_UNBOUND
+  self._bindTasks = []
+}
+
+/**
+ * socket.bind(port, [address], [callback])
+ *
+ * For UDP sockets, listen for datagrams on a named port and optional address.
+ * If address is not specified, the OS will try to listen on all addresses.
+ * After binding is done, a "listening" event is emitted and the callback(if
+ * specified) is called. Specifying both a "listening" event listener and
+ * callback is not harmful but not very useful.
+ *
+ * A bound datagram socket keeps the node process running to receive
+ * datagrams.
+ *
+ * If binding fails, an "error" event is generated. In rare case (e.g. binding
+ * a closed socket), an Error may be thrown by this method.
+ *
+ * @param {number} port
+ * @param {string} address Optional
+ * @param {function} callback Function with no parameters, Optional. Callback
+ *                            when binding is done.
+ */
+Socket.prototype.bind = function (port, address, callback) {
+  var self = this
+  if (typeof address === 'function') {
+    callback = address
+    address = undefined
+  }
+
+  if (!address) address = '0.0.0.0'
+
+  if (!port) port = 0
+
+  if (self._bindState !== BIND_STATE_UNBOUND) throw new Error('Socket is already bound')
+
+  self._bindState = BIND_STATE_BINDING
+
+  if (typeof callback === 'function') self.once('listening', callback)
+
+  chrome.sockets.udp.create(function (createInfo) {
+    self.id = createInfo.socketId
+
+    sockets[self.id] = self
+
+    var bindFns = self._bindTasks.map(function (t) { return t.fn })
+
+    series(bindFns, function (err) {
+      if (err) return self.emit('error', err)
+      chrome.sockets.udp.bind(self.id, address, port, function (result) {
+        if (result < 0) {
+          self.emit('error', new Error('Socket ' + self.id + ' failed to bind. ' +
+            chrome.runtime.lastError.message))
+          return
+        }
+        chrome.sockets.udp.getInfo(self.id, function (socketInfo) {
+          if (!socketInfo.localPort || !socketInfo.localAddress) {
+            self.emit('error', new Error('Cannot get local port/address for Socket ' + self.id))
+            return
+          }
+
+          self._port = socketInfo.localPort
+          self._address = socketInfo.localAddress
+
+          self._bindState = BIND_STATE_BOUND
+          self.emit('listening')
+
+          self._bindTasks.map(function (t) {
+            t.callback()
+          })
+        })
+      })
+    })
+  })
+}
+
+/**
+ * Internal function to receive new messages and emit `message` events.
+ */
+Socket.prototype._onReceive = function (info) {
+  var self = this
+
+  var buf = new Buffer(new Uint8Array(info.data))
+  var rinfo = {
+    address: info.remoteAddress,
+    family: 'IPv4',
+    port: info.remotePort,
+    size: buf.length
+  }
+  self.emit('message', buf, rinfo)
+}
+
+Socket.prototype._onReceiveError = function (resultCode) {
+  var self = this
+  self.emit('error', new Error('Socket ' + self.id + ' receive error ' + resultCode))
+}
+
+/**
+ * socket.send(buf, offset, length, port, address, [callback])
+ *
+ * For UDP sockets, the destination port and IP address must be
+ * specified. A string may be supplied for the address parameter, and it will
+ * be resolved with DNS. An optional callback may be specified to detect any
+ * DNS errors and when buf may be re-used. Note that DNS lookups will delay
+ * the time that a send takes place, at least until the next tick. The only
+ * way to know for sure that a send has taken place is to use the callback.
+ *
+ * If the socket has not been previously bound with a call to bind, it's
+ * assigned a random port number and bound to the "all interfaces" address
+ * (0.0.0.0 for udp4 sockets, ::0 for udp6 sockets).
+ *
+ * @param {Buffer|Arrayish|string} buf Message to be sent
+ * @param {number} offset Offset in the buffer where the message starts.
+ * @param {number} length Number of bytes in the message.
+ * @param {number} port destination port
+ * @param {string} address destination IP
+ * @param {function} callback Callback when message is done being delivered.
+ *                            Optional.
+ */
+// Socket.prototype.send = function (buf, host, port, cb) {
+Socket.prototype.send = function (buffer, offset, length, port, address, callback) {
+  var self = this
+  if (!callback) callback = function () {}
+
+  if (offset !== 0) throw new Error('Non-zero offset not supported yet')
+
+  if (self._bindState === BIND_STATE_UNBOUND) self.bind(0)
+
+  // If the socket hasn't been bound yet, push the outbound packet onto the
+  // send queue and send after binding is complete.
+  if (self._bindState !== BIND_STATE_BOUND) {
+    // If the send queue hasn't been initialized yet, do it, and install an
+    // event handler that flishes the send queue after binding is done.
+    if (!self._sendQueue) {
+      self._sendQueue = []
+      self.once('listening', function () {
+        // Flush the send queue.
+        for (var i = 0; i < self._sendQueue.length; i++) {
+          self.send.apply(self, self._sendQueue[i])
+        }
+        self._sendQueue = undefined
+      })
+    }
+    self._sendQueue.push([buffer, offset, length, port, address, callback])
+    return
+  }
+
+  if (!Buffer.isBuffer(buffer)) buffer = new Buffer(buffer)
+
+  // assuming buffer is browser implementation (`buffer` package on npm)
+  var buf = buffer.buffer
+  if (buffer.byteOffset || buffer.byteLength !== buf.byteLength) {
+    buf = buf.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+  }
+  if (offset || length !== buffer.length) {
+    buf = buf.slice(offset, length)
+  }
+
+  chrome.sockets.udp.send(self.id, buf, address, +port, function (sendInfo) {
+    if (sendInfo.resultCode < 0) {
+      var err = new Error('Socket ' + self.id + ' send error ' + sendInfo.resultCode)
+      callback(err)
+      self.emit('error', err)
+    } else {
+      callback(null)
+    }
+  })
+}
+
+/**
+ * Close the underlying socket and stop listening for data on it.
+ */
+Socket.prototype.close = function () {
+  var self = this
+  if (self._destroyed) return
+
+  delete sockets[self.id]
+  chrome.sockets.udp.close(self.id)
+  self._destroyed = true
+
+  self.emit('close')
+}
+
+/**
+ * Returns an object containing the address information for a socket. For UDP
+ * sockets, this object will contain address, family and port.
+ *
+ * @return {Object} information
+ */
+Socket.prototype.address = function () {
+  var self = this
+  return {
+    address: self._address,
+    port: self._port,
+    family: 'IPv4'
+  }
+}
+
+Socket.prototype.setBroadcast = function (flag) {
+  // No chrome.sockets equivalent
+}
+
+Socket.prototype.setTTL = function (ttl) {
+  // No chrome.sockets equivalent
+}
+
+// NOTE: Multicast code is untested. Pull requests accepted for bug fixes and to
+// add tests!
+
+/**
+ * Sets the IP_MULTICAST_TTL socket option. TTL stands for "Time to Live," but
+ * in this context it specifies the number of IP hops that a packet is allowed
+ * to go through, specifically for multicast traffic. Each router or gateway
+ * that forwards a packet decrements the TTL. If the TTL is decremented to 0
+ * by a router, it will not be forwarded.
+ *
+ * The argument to setMulticastTTL() is a number of hops between 0 and 255.
+ * The default on most systems is 1.
+ *
+ * NOTE: The Chrome version of this function is async, whereas the node
+ * version is sync. Keep this in mind.
+ *
+ * @param {number} ttl
+ * @param {function} callback CHROME-SPECIFIC: Called when the configuration
+ *                            operation is done.
+ */
+Socket.prototype.setMulticastTTL = function (ttl, callback) {
+  var self = this
+  if (!callback) callback = function () {}
+  if (self._bindState === BIND_STATE_BOUND) {
+    setMulticastTTL(callback)
+  } else {
+    self._bindTasks.push({
+      fn: setMulticastTTL,
+      callback: callback
+    })
+  }
+
+  function setMulticastTTL (callback) {
+    chrome.sockets.udp.setMulticastTimeToLive(self.id, ttl, callback)
+  }
+}
+
+/**
+ * Sets or clears the IP_MULTICAST_LOOP socket option. When this option is
+ * set, multicast packets will also be received on the local interface.
+ *
+ * NOTE: The Chrome version of this function is async, whereas the node
+ * version is sync. Keep this in mind.
+ *
+ * @param {boolean} flag
+ * @param {function} callback CHROME-SPECIFIC: Called when the configuration
+ *                            operation is done.
+ */
+Socket.prototype.setMulticastLoopback = function (flag, callback) {
+  var self = this
+  if (!callback) callback = function () {}
+  if (self._bindState === BIND_STATE_BOUND) {
+    setMulticastLoopback(callback)
+  } else {
+    self._bindTasks.push({
+      fn: setMulticastLoopback,
+      callback: callback
+    })
+  }
+
+  function setMulticastLoopback (callback) {
+    chrome.sockets.udp.setMulticastLoopbackMode(self.id, flag, callback)
+  }
+}
+
+/**
+ * Tells the kernel to join a multicast group with IP_ADD_MEMBERSHIP socket
+ * option.
+ *
+ * If multicastInterface is not specified, the OS will try to add membership
+ * to all valid interfaces.
+ *
+ * NOTE: The Chrome version of this function is async, whereas the node
+ * version is sync. Keep this in mind.
+ *
+ * @param {string} multicastAddress
+ * @param {string} [multicastInterface] Optional
+ * @param {function} callback CHROME-SPECIFIC: Called when the configuration
+ *                            operation is done.
+ */
+Socket.prototype.addMembership = function (multicastAddress,
+                                           multicastInterface,
+                                           callback) {
+  var self = this
+  if (!callback) callback = function () {}
+  chrome.sockets.udp.joinGroup(self.id, multicastAddress, callback)
+}
+
+/**
+ * Opposite of addMembership - tells the kernel to leave a multicast group
+ * with IP_DROP_MEMBERSHIP socket option. This is automatically called by the
+ * kernel when the socket is closed or process terminates, so most apps will
+ * never need to call this.
+ *
+ * NOTE: The Chrome version of this function is async, whereas the node
+ * version is sync. Keep this in mind.
+ *
+ * If multicastInterface is not specified, the OS will try to drop membership
+ * to all valid interfaces.
+ *
+ * @param  {[type]} multicastAddress
+ * @param  {[type]} multicastInterface Optional
+ * @param {function} callback CHROME-SPECIFIC: Called when the configuration
+ *                            operation is done.
+ */
+Socket.prototype.dropMembership = function (multicastAddress,
+                                            multicastInterface,
+                                            callback) {
+  var self = this
+  if (!callback) callback = function () {}
+  chrome.sockets.udp.leaveGroup(self.id, multicastAddress, callback)
+}
+
+Socket.prototype.unref = function () {
+  // No chrome.sockets equivalent
+}
+
+Socket.prototype.ref = function () {
+  // No chrome.sockets equivalent
+}
+
+}).call(this,require("buffer").Buffer)
+},{"buffer":18,"events":213,"inherits":238,"run-series":239}],238:[function(require,module,exports){
+arguments[4][214][0].apply(exports,arguments)
+},{"dup":214}],239:[function(require,module,exports){
+(function (process){
+module.exports = function (tasks, cb) {
+  var current = 0
+  var results = []
+  var isSync = true
+
+  function done (err) {
+    function end () {
+      if (cb) cb(err, results)
+    }
+    if (isSync) process.nextTick(end)
+    else end()
+  }
+
+  function each (err, result) {
+    results.push(result)
+    if (++current >= tasks.length || err) done(err)
+    else tasks[current](each)
+  }
+
+  if (tasks.length > 0) tasks[0](each)
+  else done(null)
+
+  isSync = false
+}
+
+}).call(this,require('_process'))
+},{"_process":217}],240:[function(require,module,exports){
 module.exports = require('./lib/index.js');
 
-},{"./lib/index.js":238}],238:[function(require,module,exports){
+},{"./lib/index.js":241}],241:[function(require,module,exports){
 (function (Buffer){
 /**
  * Implements ethereum's DPT 
@@ -26562,7 +27024,7 @@ DPT.prototype.refresh = function () {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"./logic.js":239,"async":7,"buffer":18,"dgram":15,"ethereumjs-util":248,"events":213,"k-bucket":240,"rlp":277,"secp256k1":15,"semaphore":242,"util":234}],239:[function(require,module,exports){
+},{"./logic.js":242,"async":7,"buffer":18,"dgram":237,"ethereumjs-util":251,"events":213,"k-bucket":243,"rlp":280,"secp256k1":15,"semaphore":245,"util":234}],242:[function(require,module,exports){
 const async = require('async')
 const pingSem = require('semaphore')(3)
 
@@ -26608,7 +27070,7 @@ module.exports = function (dpt) {
   })
 }
 
-},{"async":7,"semaphore":242}],240:[function(require,module,exports){
+},{"async":7,"semaphore":245}],243:[function(require,module,exports){
 (function (Buffer){
 /*
 
@@ -27012,7 +27474,7 @@ KBucket.prototype.update = function update (contact, index) {
 };
 
 }).call(this,{"isBuffer":require("../../../browserify/node_modules/insert-module-globals/node_modules/is-buffer/index.js")})
-},{"../../../browserify/node_modules/insert-module-globals/node_modules/is-buffer/index.js":215,"assert":16,"buffer-equal":241,"crypto":21,"events":213,"util":234}],241:[function(require,module,exports){
+},{"../../../browserify/node_modules/insert-module-globals/node_modules/is-buffer/index.js":215,"assert":16,"buffer-equal":244,"crypto":21,"events":213,"util":234}],244:[function(require,module,exports){
 var Buffer = require('buffer').Buffer; // for use with browserify
 
 module.exports = function (a, b) {
@@ -27028,7 +27490,7 @@ module.exports = function (a, b) {
     return true;
 };
 
-},{"buffer":18}],242:[function(require,module,exports){
+},{"buffer":18}],245:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -27098,7 +27560,7 @@ module.exports = function(capacity) {
 };
 
 }).call(this,require('_process'))
-},{"_process":217}],243:[function(require,module,exports){
+},{"_process":217}],246:[function(require,module,exports){
 var assert = require('assert')
 var BigInteger = require('bigi')
 
@@ -27174,7 +27636,7 @@ Curve.prototype.validate = function(Q) {
 
 module.exports = Curve
 
-},{"./point":247,"assert":16,"bigi":10}],244:[function(require,module,exports){
+},{"./point":250,"assert":16,"bigi":10}],247:[function(require,module,exports){
 module.exports={
   "secp128r1": {
     "p": "fffffffdffffffffffffffffffffffff",
@@ -27241,7 +27703,7 @@ module.exports={
   }
 }
 
-},{}],245:[function(require,module,exports){
+},{}],248:[function(require,module,exports){
 var Point = require('./point')
 var Curve = require('./curve')
 
@@ -27253,7 +27715,7 @@ module.exports = {
   getCurveByName: getCurveByName
 }
 
-},{"./curve":243,"./names":246,"./point":247}],246:[function(require,module,exports){
+},{"./curve":246,"./names":249,"./point":250}],249:[function(require,module,exports){
 var BigInteger = require('bigi')
 
 var curves = require('./curves')
@@ -27276,7 +27738,7 @@ function getCurveByName(name) {
 
 module.exports = getCurveByName
 
-},{"./curve":243,"./curves":244,"bigi":10}],247:[function(require,module,exports){
+},{"./curve":246,"./curves":247,"bigi":10}],250:[function(require,module,exports){
 (function (Buffer){
 var assert = require('assert')
 var BigInteger = require('bigi')
@@ -27529,7 +27991,7 @@ Point.prototype.toString = function () {
 module.exports = Point
 
 }).call(this,require("buffer").Buffer)
-},{"assert":16,"bigi":10,"buffer":18}],248:[function(require,module,exports){
+},{"assert":16,"bigi":10,"buffer":18}],251:[function(require,module,exports){
 (function (Buffer){
 const SHA3 = require('sha3')
 const ec = require('elliptic').ec('secp256k1')
@@ -27912,7 +28374,7 @@ function padToEven (a) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"assert":16,"bn.js":249,"buffer":18,"elliptic":252,"rlp":277,"sha3":250}],249:[function(require,module,exports){
+},{"assert":16,"bn.js":252,"buffer":18,"elliptic":255,"rlp":280,"sha3":253}],252:[function(require,module,exports){
 (function (module, exports) {
 
 'use strict';
@@ -30361,7 +30823,7 @@ Mont.prototype.invm = function invm(a) {
 
 })(typeof module === 'undefined' || module, this);
 
-},{}],250:[function(require,module,exports){
+},{}],253:[function(require,module,exports){
 (function (Buffer){
 const Sha3 = require('js-sha3')
 
@@ -30387,19 +30849,19 @@ module.exports = {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"buffer":18,"js-sha3":251}],251:[function(require,module,exports){
+},{"buffer":18,"js-sha3":254}],254:[function(require,module,exports){
 arguments[4][14][0].apply(exports,arguments)
-},{"dup":14}],252:[function(require,module,exports){
+},{"dup":14}],255:[function(require,module,exports){
 arguments[4][56][0].apply(exports,arguments)
-},{"../package.json":276,"./elliptic/curve":255,"./elliptic/curves":258,"./elliptic/ec":259,"./elliptic/eddsa":262,"./elliptic/hmac-drbg":265,"./elliptic/utils":267,"brorand":268,"dup":56}],253:[function(require,module,exports){
+},{"../package.json":279,"./elliptic/curve":258,"./elliptic/curves":261,"./elliptic/ec":262,"./elliptic/eddsa":265,"./elliptic/hmac-drbg":268,"./elliptic/utils":270,"brorand":271,"dup":56}],256:[function(require,module,exports){
 arguments[4][57][0].apply(exports,arguments)
-},{"../../elliptic":252,"bn.js":249,"dup":57}],254:[function(require,module,exports){
+},{"../../elliptic":255,"bn.js":252,"dup":57}],257:[function(require,module,exports){
 arguments[4][58][0].apply(exports,arguments)
-},{"../../elliptic":252,"../curve":255,"bn.js":249,"dup":58,"inherits":275}],255:[function(require,module,exports){
+},{"../../elliptic":255,"../curve":258,"bn.js":252,"dup":58,"inherits":278}],258:[function(require,module,exports){
 arguments[4][59][0].apply(exports,arguments)
-},{"./base":253,"./edwards":254,"./mont":256,"./short":257,"dup":59}],256:[function(require,module,exports){
+},{"./base":256,"./edwards":257,"./mont":259,"./short":260,"dup":59}],259:[function(require,module,exports){
 arguments[4][60][0].apply(exports,arguments)
-},{"../../elliptic":252,"../curve":255,"bn.js":249,"dup":60,"inherits":275}],257:[function(require,module,exports){
+},{"../../elliptic":255,"../curve":258,"bn.js":252,"dup":60,"inherits":278}],260:[function(require,module,exports){
 'use strict';
 
 var curve = require('../curve');
@@ -31308,9 +31770,9 @@ JPoint.prototype.isInfinity = function isInfinity() {
   return this.z.cmpn(0) === 0;
 };
 
-},{"../../elliptic":252,"../curve":255,"bn.js":249,"inherits":275}],258:[function(require,module,exports){
+},{"../../elliptic":255,"../curve":258,"bn.js":252,"inherits":278}],261:[function(require,module,exports){
 arguments[4][62][0].apply(exports,arguments)
-},{"../elliptic":252,"./precomputed/secp256k1":266,"dup":62,"hash.js":269}],259:[function(require,module,exports){
+},{"../elliptic":255,"./precomputed/secp256k1":269,"dup":62,"hash.js":272}],262:[function(require,module,exports){
 'use strict';
 
 var bn = require('bn.js');
@@ -31522,39 +31984,39 @@ EC.prototype.getKeyRecoveryParam = function(e, signature, Q, enc) {
   throw new Error('Unable to find valid recovery factor');
 };
 
-},{"../../elliptic":252,"./key":260,"./signature":261,"bn.js":249}],260:[function(require,module,exports){
+},{"../../elliptic":255,"./key":263,"./signature":264,"bn.js":252}],263:[function(require,module,exports){
 arguments[4][64][0].apply(exports,arguments)
-},{"bn.js":249,"dup":64}],261:[function(require,module,exports){
+},{"bn.js":252,"dup":64}],264:[function(require,module,exports){
 arguments[4][65][0].apply(exports,arguments)
-},{"../../elliptic":252,"bn.js":249,"dup":65}],262:[function(require,module,exports){
+},{"../../elliptic":255,"bn.js":252,"dup":65}],265:[function(require,module,exports){
 arguments[4][66][0].apply(exports,arguments)
-},{"../../elliptic":252,"./key":263,"./signature":264,"dup":66,"hash.js":269}],263:[function(require,module,exports){
+},{"../../elliptic":255,"./key":266,"./signature":267,"dup":66,"hash.js":272}],266:[function(require,module,exports){
 arguments[4][67][0].apply(exports,arguments)
-},{"../../elliptic":252,"dup":67}],264:[function(require,module,exports){
+},{"../../elliptic":255,"dup":67}],267:[function(require,module,exports){
 arguments[4][68][0].apply(exports,arguments)
-},{"../../elliptic":252,"bn.js":249,"dup":68}],265:[function(require,module,exports){
+},{"../../elliptic":255,"bn.js":252,"dup":68}],268:[function(require,module,exports){
 arguments[4][69][0].apply(exports,arguments)
-},{"../elliptic":252,"dup":69,"hash.js":269}],266:[function(require,module,exports){
+},{"../elliptic":255,"dup":69,"hash.js":272}],269:[function(require,module,exports){
 arguments[4][70][0].apply(exports,arguments)
-},{"dup":70}],267:[function(require,module,exports){
+},{"dup":70}],270:[function(require,module,exports){
 arguments[4][71][0].apply(exports,arguments)
-},{"bn.js":249,"dup":71}],268:[function(require,module,exports){
+},{"bn.js":252,"dup":71}],271:[function(require,module,exports){
 arguments[4][72][0].apply(exports,arguments)
-},{"dup":72}],269:[function(require,module,exports){
+},{"dup":72}],272:[function(require,module,exports){
 arguments[4][73][0].apply(exports,arguments)
-},{"./hash/common":270,"./hash/hmac":271,"./hash/ripemd":272,"./hash/sha":273,"./hash/utils":274,"dup":73}],270:[function(require,module,exports){
+},{"./hash/common":273,"./hash/hmac":274,"./hash/ripemd":275,"./hash/sha":276,"./hash/utils":277,"dup":73}],273:[function(require,module,exports){
 arguments[4][74][0].apply(exports,arguments)
-},{"../hash":269,"dup":74}],271:[function(require,module,exports){
+},{"../hash":272,"dup":74}],274:[function(require,module,exports){
 arguments[4][75][0].apply(exports,arguments)
-},{"../hash":269,"dup":75}],272:[function(require,module,exports){
+},{"../hash":272,"dup":75}],275:[function(require,module,exports){
 arguments[4][76][0].apply(exports,arguments)
-},{"../hash":269,"dup":76}],273:[function(require,module,exports){
+},{"../hash":272,"dup":76}],276:[function(require,module,exports){
 arguments[4][77][0].apply(exports,arguments)
-},{"../hash":269,"dup":77}],274:[function(require,module,exports){
+},{"../hash":272,"dup":77}],277:[function(require,module,exports){
 arguments[4][78][0].apply(exports,arguments)
-},{"dup":78,"inherits":275}],275:[function(require,module,exports){
+},{"dup":78,"inherits":278}],278:[function(require,module,exports){
 arguments[4][214][0].apply(exports,arguments)
-},{"dup":214}],276:[function(require,module,exports){
+},{"dup":214}],279:[function(require,module,exports){
 module.exports={
   "name": "elliptic",
   "version": "5.2.1",
@@ -31604,7 +32066,7 @@ module.exports={
   "_from": "elliptic@^5.0.0"
 }
 
-},{}],277:[function(require,module,exports){
+},{}],280:[function(require,module,exports){
 (function (Buffer){
 const assert = require('assert')
 /**
@@ -31837,7 +32299,7 @@ function toBuffer (v) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"assert":16,"buffer":18}],278:[function(require,module,exports){
+},{"assert":16,"buffer":18}],281:[function(require,module,exports){
 module.exports = enableDestroy;
 
 function enableDestroy(server) {
@@ -31858,7 +32320,7 @@ function enableDestroy(server) {
   };
 }
 
-},{}],279:[function(require,module,exports){
+},{}],282:[function(require,module,exports){
 //     Underscore.js 1.8.3
 //     http://underscorejs.org
 //     (c) 2009-2015 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
@@ -33408,7 +33870,7 @@ function enableDestroy(server) {
   }
 }.call(this));
 
-},{}],280:[function(require,module,exports){
+},{}],283:[function(require,module,exports){
 module.exports={
   "name": "devp2p",
   "version": "0.0.4",
