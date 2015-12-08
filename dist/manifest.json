@@ -1,0 +1,9 @@
+{
+  "name": "devp2p",
+  "version": "0.2",
+  "browser_action": {
+    "default_popup": "index.html"
+  },
+  "permissions": ["background", "notifications"],
+  "manifest_version": 2
+}
