@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "standard ./index.js ./lib/*.js && mocha ./test",
-    "build-browser": "browserify --ignore secp256k1 --standalone devp2p index.js > dist/index.js"
+    "build-browser": "browserify --standalone devp2p index.js > dist/index.js"
   },
   "repository": {
     "type": "git",
@@ -24,7 +24,8 @@
   "homepage": "https://github.com/ethereum/ethereumjs-p2p",
   "browser": {
     "sha3": "browserify-sha3",
-    "dgram": "chrome-dgram"
+    "dgram": "chrome-dgram",
+    "secp256k1": "secp256k1-browserify"
   },
   "dependencies": {
     "async": "^1.4.2",
@@ -47,6 +48,7 @@
     "tape": "^4.0.0",
     "browserify": "~12.0.1",
     "chrome-dgram": "~2.1.7",
-    "browserify-sha3": "0.0.1"
+    "browserify-sha3": "0.0.1",
+    "secp256k1-browserify": "0.0.0"
   }
 }
